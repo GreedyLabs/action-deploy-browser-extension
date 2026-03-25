@@ -21,7 +21,7 @@ src/
 ### Chrome only
 
 ```yaml
-- uses: greedylabs/action-deploy-browser-extension@v1
+- uses: GreedyLabs/action-deploy-browser-extension@v1
   with:
     zip-path: dist/extension.zip
     targets: chrome
@@ -33,7 +33,7 @@ src/
 ### Edge only
 
 ```yaml
-- uses: greedylabs/action-deploy-browser-extension@v1
+- uses: GreedyLabs/action-deploy-browser-extension@v1
   with:
     zip-path: dist/extension.zip
     targets: edge
@@ -46,7 +46,7 @@ src/
 ### Both stores
 
 ```yaml
-- uses: greedylabs/action-deploy-browser-extension@v1
+- uses: GreedyLabs/action-deploy-browser-extension@v1
   with:
     zip-path: dist/extension.zip
     targets: chrome, edge
@@ -82,7 +82,7 @@ jobs:
         run: zip -r dist/extension.zip dist/ --exclude "*.map"
 
       - name: Deploy
-        uses: greedylabs/action-deploy-browser-extension@v1
+        uses: GreedyLabs/action-deploy-browser-extension@v1
         with:
           zip-path: dist/extension.zip
           targets: chrome, edge
