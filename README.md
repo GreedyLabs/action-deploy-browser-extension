@@ -121,7 +121,7 @@ jobs:
 2. Keys tab → **Add Key** → JSON → download
 3. Enable the **Chrome Web Store API** in APIs & Services → Library
 4. [Chrome Web Store Developer Dashboard](https://chrome.google.com/webstore/devconsole) → Account → **API Access** → register the service account email
-5. Store the JSON file contents (minified with `jq -c . key.json`) as `CHROME_SERVICE_ACCOUNT_KEY`
+5. Store the JSON file contents (**minified** with `jq -c . key.json`) as `CHROME_SERVICE_ACCOUNT_KEY`
 
 ### Microsoft Edge Add-ons — `EDGE_CLIENT_ID`, `EDGE_API_KEY`
 

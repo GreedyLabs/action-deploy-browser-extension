@@ -83,7 +83,7 @@ export class ChromeWebStoreTarget extends DeployTarget {
   }
 
   private async getAccessToken(): Promise<string> {
-    const raw = requireEnv('CHROME_SERVICE_ACCOUNT_KEY').replace(/\n/g, '\\n');
+    const raw = requireEnv('CHROME_SERVICE_ACCOUNT_KEY').trim();
     const key = JSON.parse(raw) as ServiceAccountKey;
     const now = Math.floor(Date.now() / 1000);
 

@@ -30996,7 +30996,7 @@ class ChromeWebStoreTarget extends DeployTarget {
         this.log(`Publish status: ${JSON.stringify(data.status)}`);
     }
     async getAccessToken() {
-        const raw = requireEnv('CHROME_SERVICE_ACCOUNT_KEY').replace(/\n/g, '\\n');
+        const raw = requireEnv('CHROME_SERVICE_ACCOUNT_KEY').trim();
         const key = JSON.parse(raw);
         const now = Math.floor(Date.now() / 1000);
         const header = base64url(Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })));
