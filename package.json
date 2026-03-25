@@ -1,0 +1,26 @@
+{
+  "name": "action-deploy-chrome-extension",
+  "version": "1.0.0",
+  "description": "GitHub Action to deploy browser extensions to Chrome Web Store and Microsoft Edge Add-ons",
+  "type": "module",
+  "main": "dist/index.js",
+  "packageManager": "pnpm@10.32.1",
+  "scripts": {
+    "build": "ncc build src/index.ts -o dist --quiet",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src/**/*.ts",
+    "lint:fix": "eslint src/**/*.ts --fix"
+  },
+  "dependencies": {
+    "@actions/core": "^3.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "@typescript-eslint/eslint-plugin": "^8.57.2",
+    "@typescript-eslint/parser": "^8.57.2",
+    "@vercel/ncc": "^0.38.4",
+    "eslint": "^10.1.0",
+    "typescript": "^5.9.3"
+  },
+  "license": "MIT"
+}

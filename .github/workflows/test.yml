@@ -1,0 +1,22 @@
+name: Test Deploy Action
+
+on: [workflow_dispatch]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy
+        uses: ./
+        with:
+          zip-path: dist.zip
+          targets: chrome, edge
+          chrome-extension-id: ${{ vars.CHROME_EXTENSION_ID }}
+          edge-product-id: ${{ vars.EDGE_PRODUCT_ID }}
+        env:
+          CHROME_SERVICE_ACCOUNT_KEY: ${{ secrets.CHROME_SERVICE_ACCOUNT_KEY }}
+          EDGE_CLIENT_ID: ${{ secrets.EDGE_CLIENT_ID }}
+          EDGE_API_KEY: ${{ secrets.EDGE_API_KEY }}

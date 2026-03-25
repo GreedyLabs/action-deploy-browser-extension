@@ -1,0 +1,25 @@
+node_modules/
+
+# Build output is committed for GitHub Actions
+# dist/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+npm-debug.log*
+
+# Test artifacts
+coverage/
+
+.actrc
+.secrets
+.vars

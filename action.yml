@@ -1,0 +1,42 @@
+name: Deploy Browser Extension
+description: Upload and publish browser extensions to Chrome Web Store and/or Microsoft Edge Add-ons
+author: greedylabs
+
+branding:
+  icon: upload-cloud
+  color: blue
+
+inputs:
+  zip-path:
+    description: Path to the zip file to upload
+    required: true
+  targets:
+    description: Comma-separated list of targets (chrome, edge)
+    required: true
+    default: chrome
+  publish:
+    description: Publish after upload
+    required: false
+    default: 'false'
+
+  # Chrome Web Store
+  chrome-extension-id:
+    description: Chrome Web Store extension ID
+    required: false
+
+  # Microsoft Edge Add-ons
+  edge-product-id:
+    description: Microsoft Edge Add-ons product ID
+    required: false
+
+outputs:
+  chrome-upload-status:
+    description: Chrome Web Store upload state
+  chrome-publish-status:
+    description: Chrome Web Store publish status
+  edge-operation-id:
+    description: Microsoft Edge Add-ons upload operation ID
+
+runs:
+  using: node20
+  main: dist/index.js
