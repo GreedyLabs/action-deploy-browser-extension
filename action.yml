@@ -38,5 +38,5 @@ outputs:
     description: Microsoft Edge Add-ons upload operation ID
 
 runs:
-  using: node20
+  using: node24
   main: dist/index.js

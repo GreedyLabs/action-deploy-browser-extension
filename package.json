@@ -8,8 +8,9 @@
   "scripts": {
     "build": "ncc build src/index.ts -o dist --quiet",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src/**/*.ts",
-    "lint:fix": "eslint src/**/*.ts --fix"
+    "lint": "eslint src tests",
+    "lint:fix": "eslint src tests --fix",
+    "test": "vitest run"
   },
   "dependencies": {
     "@actions/core": "^3.0.0"
@@ -20,7 +21,9 @@
     "@typescript-eslint/parser": "^8.57.2",
     "@vercel/ncc": "^0.38.4",
     "eslint": "^10.1.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.57.2",
+    "vitest": "^3.2.4"
   },
   "license": "MIT"
 }

@@ -8,12 +8,18 @@ Both stores deploy in parallel when multiple targets are specified. The first su
 
 ```
 src/
-├── utils.ts          — shared utilities (requireEnv, base64url)
-├── deploy.ts         — abstract DeployTarget base class
-├── index.ts          — action entrypoint
+├── index.ts          — entrypoint (calls run); ncc bundles this into dist/index.js
+├── main.ts           — run(): parse inputs → deploy each target → write summary
+├── inputs.ts         — input parsing/validation (getInputs, parseTargets)
+├── env.ts            — requireEnv for credentials
+├── google-auth.ts    — Chrome OAuth token (RS256 JWT) + base64url
+├── summary.ts        — GitHub job-summary table
 └── targets/
+    ├── base.ts       — abstract DeployTarget base class
     ├── chrome.ts     — ChromeWebStoreTarget
     └── edge.ts       — EdgeAddonsTarget
+tests/                — vitest unit tests
+└── fixtures/         — sample extension package (dist.zip) for the manual test workflow
 ```
 
 ## Usage

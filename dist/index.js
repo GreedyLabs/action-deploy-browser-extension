@@ -29342,7 +29342,7 @@ const _summary = new Summary();
  * @deprecated use `core.summary`
  */
 const markdownSummary = (/* unused pure expression or super */ null && (_summary));
-const summary = (/* unused pure expression or super */ null && (_summary));
+const summary = _summary;
 //# sourceMappingURL=summary.js.map
 ;// CONCATENATED MODULE: ./node_modules/.pnpm/@actions+core@3.0.0/node_modules/@actions/core/lib/path-utils.js
 
@@ -30891,14 +30891,39 @@ function getIDToken(aud) {
  */
 
 //# sourceMappingURL=core.js.map
+;// CONCATENATED MODULE: ./src/inputs.ts
+
+const VALID_TARGETS = ['chrome', 'edge'];
+/** Parses and validates the comma-separated `targets` input. */
+function parseTargets(raw) {
+    const targets = raw.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean);
+    const invalid = targets.filter((t) => !VALID_TARGETS.includes(t));
+    if (invalid.length > 0) {
+        throw new Error(`Unknown target(s): ${invalid.join(', ')}. Valid targets: ${VALID_TARGETS.join(', ')}`);
+    }
+    return targets;
+}
+/** Reads all action inputs from the environment, validating as it goes. */
+function getInputs() {
+    return {
+        zipPath: getInput('zip-path', { required: true }),
+        targets: parseTargets(getInput('targets', { required: true })),
+        shouldPublish: getInput('publish').trim().toLowerCase() === 'true',
+        chromeExtensionId: getInput('chrome-extension-id'),
+        edgeProductId: getInput('edge-product-id'),
+    };
+}
+
 ;// CONCATENATED MODULE: external "node:fs"
 const external_node_fs_namespaceObject = __WEBPACK_EXTERNAL_createRequire(import.meta.url)("node:fs");
 var external_node_fs_default = /*#__PURE__*/__nccwpck_require__.n(external_node_fs_namespaceObject);
-// EXTERNAL MODULE: external "node:crypto"
-var external_node_crypto_ = __nccwpck_require__(7598);
-var external_node_crypto_default = /*#__PURE__*/__nccwpck_require__.n(external_node_crypto_);
-;// CONCATENATED MODULE: ./src/deploy.ts
+;// CONCATENATED MODULE: ./src/targets/base.ts
 
+/**
+ * Base class for a deploy target (one browser store). Subclasses implement the
+ * three store-specific steps; this class owns the shared orchestration:
+ * validate → upload → optionally publish, all wrapped in a log group.
+ */
 class DeployTarget {
     name;
     log;
@@ -30911,14 +30936,16 @@ class DeployTarget {
         try {
             this.validate();
             this.log('Uploading extension...');
-            await this.upload(zipPath);
+            const upload = await this.upload(zipPath);
+            let publish;
             if (shouldPublish) {
                 this.log('Publishing extension...');
-                await this.publish();
+                publish = await this.publish();
             }
             else {
                 this.log('Skipping publish (publish=false)');
             }
+            return { target: this.name, upload, publish };
         }
         finally {
             endGroup();
@@ -30926,15 +30953,66 @@ class DeployTarget {
     }
 }
 
-;// CONCATENATED MODULE: ./src/utils.ts
+;// CONCATENATED MODULE: ./src/env.ts
+/**
+ * Reads a required environment variable, throwing a descriptive error when it
+ * is missing or empty. Used for credentials that are passed to the action via
+ * `env:` rather than `with:` inputs.
+ */
 function requireEnv(name) {
     const value = process.env[name];
     if (!value)
         throw new Error(`Missing environment variable: ${name}`);
     return value;
 }
+
+// EXTERNAL MODULE: external "node:crypto"
+var external_node_crypto_ = __nccwpck_require__(7598);
+var external_node_crypto_default = /*#__PURE__*/__nccwpck_require__.n(external_node_crypto_);
+;// CONCATENATED MODULE: ./src/google-auth.ts
+
+const TOKEN_URL = 'https://oauth2.googleapis.com/token';
+const SCOPE = 'https://www.googleapis.com/auth/chromewebstore';
+const TOKEN_TTL_SECONDS = 3600;
+/** Base64url encoding (RFC 4648 §5) — base64 with `+/` swapped and padding stripped. */
 function base64url(buf) {
     return buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+/**
+ * Mints a short-lived Google OAuth2 access token for the Chrome Web Store API
+ * by signing a JWT with the service account's private key (RS256) and
+ * exchanging it via the JWT-bearer grant.
+ *
+ * @param rawKey JSON string of the service account key (the contents of
+ *   `CHROME_SERVICE_ACCOUNT_KEY`).
+ * @param now Current Unix time in seconds. Injectable for testing.
+ */
+async function createGoogleAccessToken(rawKey, now = Math.floor(Date.now() / 1000)) {
+    const key = JSON.parse(rawKey.trim());
+    const header = base64url(Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })));
+    const payload = base64url(Buffer.from(JSON.stringify({
+        iss: key.client_email,
+        scope: SCOPE,
+        aud: TOKEN_URL,
+        iat: now,
+        exp: now + TOKEN_TTL_SECONDS,
+    })));
+    const sign = external_node_crypto_default().createSign('RSA-SHA256');
+    sign.update(`${header}.${payload}`);
+    const signature = base64url(sign.sign(key.private_key));
+    const res = await fetch(TOKEN_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+            grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+            assertion: `${header}.${payload}.${signature}`,
+        }),
+    });
+    const data = await res.json();
+    if (!data.access_token) {
+        throw new Error(`Failed to obtain access token: ${JSON.stringify(data)}`);
+    }
+    return data.access_token;
 }
 
 ;// CONCATENATED MODULE: ./src/targets/chrome.ts
@@ -30943,10 +31021,9 @@ function base64url(buf) {
 
 
 
-const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const API_BASE = 'https://www.googleapis.com/upload/chromewebstore/v1.1';
 const PUBLISH_BASE = 'https://www.googleapis.com/chromewebstore/v1.1';
-const SCOPE = 'https://www.googleapis.com/auth/chromewebstore';
+const API_HEADERS = { 'x-goog-api-version': '2' };
 class ChromeWebStoreTarget extends DeployTarget {
     extensionId;
     token = '';
@@ -30961,69 +31038,47 @@ class ChromeWebStoreTarget extends DeployTarget {
     }
     async upload(zipPath) {
         this.log('Obtaining access token...');
-        this.token = await this.getAccessToken();
+        this.token = await createGoogleAccessToken(requireEnv('CHROME_SERVICE_ACCOUNT_KEY'));
         this.log('Access token obtained');
         const res = await fetch(`${API_BASE}/items/${this.extensionId}`, {
             method: 'PUT',
-            headers: {
-                'Authorization': `Bearer ${this.token}`,
-                'x-goog-api-version': '2',
-            },
+            headers: { ...this.authHeaders(), ...API_HEADERS },
             body: external_node_fs_default().readFileSync(zipPath),
         });
         const data = await res.json();
         setOutput('chrome-upload-status', data.uploadState);
         if (data.uploadState !== 'SUCCESS') {
-            throw new Error(`Upload failed: ${JSON.stringify(data)}`);
+            throw new Error(`Upload failed (${data.uploadState}): ${formatItemErrors(data)}`);
         }
         this.log(`Upload status: ${data.uploadState}`);
+        return data.uploadState;
     }
     async publish() {
         const res = await fetch(`${PUBLISH_BASE}/items/${this.extensionId}/publish`, {
             method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${this.token}`,
-                'x-goog-api-version': '2',
-                'Content-Length': '0',
-            },
+            headers: { ...this.authHeaders(), ...API_HEADERS, 'Content-Length': '0' },
         });
         if (!res.ok) {
             const data = await res.json();
             throw new Error(`Publish failed (${res.status}): ${JSON.stringify(data)}`);
         }
         const data = await res.json();
-        setOutput('chrome-publish-status', JSON.stringify(data.status));
-        this.log(`Publish status: ${JSON.stringify(data.status)}`);
+        const status = JSON.stringify(data.status);
+        setOutput('chrome-publish-status', status);
+        this.log(`Publish status: ${status}`);
+        return status;
     }
-    async getAccessToken() {
-        const raw = requireEnv('CHROME_SERVICE_ACCOUNT_KEY').trim();
-        const key = JSON.parse(raw);
-        const now = Math.floor(Date.now() / 1000);
-        const header = base64url(Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })));
-        const payload = base64url(Buffer.from(JSON.stringify({
-            iss: key.client_email,
-            scope: SCOPE,
-            aud: TOKEN_URL,
-            iat: now,
-            exp: now + 3600,
-        })));
-        const sign = external_node_crypto_default().createSign('RSA-SHA256');
-        sign.update(`${header}.${payload}`);
-        const signature = base64url(sign.sign(key.private_key));
-        const res = await fetch(TOKEN_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: new URLSearchParams({
-                grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
-                assertion: `${header}.${payload}.${signature}`,
-            }),
-        });
-        const data = await res.json();
-        if (!data.access_token) {
-            throw new Error(`Failed to obtain access token: ${JSON.stringify(data)}`);
-        }
-        return data.access_token;
+    authHeaders() {
+        return { Authorization: `Bearer ${this.token}` };
     }
+}
+/** Renders the Chrome Web Store `itemError` array (manifest/package validation) readably. */
+function formatItemErrors(data) {
+    if (!data.itemError?.length)
+        return JSON.stringify(data);
+    return data.itemError
+        .map((e) => `${e.error_code ?? 'ERROR'}: ${e.error_detail ?? ''}`.trim())
+        .join('; ');
 }
 
 ;// CONCATENATED MODULE: ./src/targets/edge.ts
@@ -31047,19 +31102,17 @@ class EdgeAddonsTarget extends DeployTarget {
     async upload(zipPath) {
         const res = await fetch(`${edge_API_BASE}/${this.productId}/submissions/draft/package`, {
             method: 'POST',
-            headers: {
-                ...this.authHeaders(),
-                'Content-Type': 'application/zip',
-            },
+            headers: { ...this.authHeaders(), 'Content-Type': 'application/zip' },
             body: external_node_fs_default().readFileSync(zipPath),
         });
         if (!res.ok) {
-            const body = await res.text();
-            throw new Error(`Upload failed (${res.status}): ${body}`);
+            throw new Error(`Upload failed (${res.status}): ${await res.text()}`);
         }
-        const operationId = res.headers.get('Location');
-        setOutput('edge-operation-id', operationId ?? '');
-        this.log(`Upload status: accepted (operation: ${operationId})`);
+        const operationId = res.headers.get('Location') ?? '';
+        setOutput('edge-operation-id', operationId);
+        const status = `accepted (operation: ${operationId})`;
+        this.log(`Upload status: ${status}`);
+        return status;
     }
     async publish() {
         const res = await fetch(`${edge_API_BASE}/${this.productId}/submissions`, {
@@ -31067,52 +31120,69 @@ class EdgeAddonsTarget extends DeployTarget {
             headers: this.authHeaders(),
         });
         if (!res.ok) {
-            const body = await res.text();
-            throw new Error(`Publish failed (${res.status}): ${body}`);
+            throw new Error(`Publish failed (${res.status}): ${await res.text()}`);
         }
-        this.log(`Publish status: ${res.status} ${res.statusText}`);
+        const status = `${res.status} ${res.statusText}`;
+        this.log(`Publish status: ${status}`);
+        return status;
     }
     authHeaders() {
         return {
-            'Authorization': `ApiKey ${requireEnv('EDGE_API_KEY')}`,
+            Authorization: `ApiKey ${requireEnv('EDGE_API_KEY')}`,
             'X-ClientID': requireEnv('EDGE_CLIENT_ID'),
         };
     }
 }
 
-;// CONCATENATED MODULE: ./src/index.ts
+;// CONCATENATED MODULE: ./src/summary.ts
 
-
-
-const VALID_TARGETS = ['chrome', 'edge'];
-function parseTargets(raw) {
-    const targets = raw.split(',').map((t) => t.trim().toLowerCase());
-    const invalid = targets.filter((t) => !VALID_TARGETS.includes(t));
-    if (invalid.length > 0) {
-        throw new Error(`Unknown target(s): ${invalid.join(', ')}. Valid targets: ${VALID_TARGETS.join(', ')}`);
-    }
-    return targets;
+/**
+ * Writes a per-target results table to the GitHub Actions job summary so the
+ * outcome is visible at a glance in the Actions/PR UI. Best-effort and purely
+ * additive: it does not affect deploy behaviour, outputs, or exit status. When
+ * `GITHUB_STEP_SUMMARY` is not set (e.g. local `act` runs) it silently no-ops.
+ */
+async function writeDeploySummary(results) {
+    if (!process.env.GITHUB_STEP_SUMMARY)
+        return;
+    summary.addHeading('Deploy Browser Extension', 2);
+    summary.addTable([
+        [
+            { data: 'Target', header: true },
+            { data: 'Upload', header: true },
+            { data: 'Publish', header: true },
+        ],
+        ...results.map((r) => [r.target, r.upload, r.publish ?? '— (skipped)']),
+    ]);
+    await summary.write();
 }
+
+;// CONCATENATED MODULE: ./src/main.ts
+
+
+
+
+
 async function run() {
     try {
-        const zipPath = getInput('zip-path', { required: true });
-        const targets = parseTargets(getInput('targets', { required: true }));
-        const shouldPublish = getInput('publish').trim().toLowerCase() === 'true';
+        const { zipPath, targets, shouldPublish, chromeExtensionId, edgeProductId } = getInputs();
         const options = { zipPath, shouldPublish };
-        const chromeExtensionId = getInput('chrome-extension-id');
-        const edgeProductId = getInput('edge-product-id');
         info(`Targets: ${targets.join(', ')} | zip: ${zipPath} | publish: ${shouldPublish}`);
-        await Promise.all(targets.map((target) => {
+        const results = await Promise.all(targets.map((target) => {
             switch (target) {
                 case 'chrome': return new ChromeWebStoreTarget(chromeExtensionId).run(options);
                 case 'edge': return new EdgeAddonsTarget(edgeProductId).run(options);
             }
         }));
+        await writeDeploySummary(results);
         info(`✓ Successfully deployed to: ${targets.join(', ')}`);
     }
     catch (err) {
         setFailed(err instanceof Error ? err.message : String(err));
     }
 }
-run();
+
+;// CONCATENATED MODULE: ./src/index.ts
+
+void run();
 

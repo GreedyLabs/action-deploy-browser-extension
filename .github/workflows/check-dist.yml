@@ -1,0 +1,48 @@
+name: Check dist
+
+# JavaScript actions run the committed dist/ bundle, not src/. This workflow
+# rebuilds dist/ from source and fails if the result differs from what's
+# committed — i.e. someone changed src/ but forgot to run `pnpm build`.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check-dist:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Rebuild dist
+        run: pnpm build
+
+      - name: Compare committed dist with rebuild
+        run: |
+          if [ -n "$(git status --porcelain dist/)" ]; then
+            echo "::error::dist/ is out of date — run 'pnpm build' and commit the result."
+            git diff --stat -- dist/
+            exit 1
+          fi
+          echo "dist/ is up to date."
+
+      - name: Upload rebuilt dist on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/

@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "d=\"${CLAUDE_PROJECT_DIR:-$(pwd)}\"; f=$(jq -r \".tool_input.file_path // empty\"); case \"$f\" in \"$d\"/src/*.ts) (cd \"$d\" && pnpm build) >/dev/null 2>&1 || true;; esac",
+            "statusMessage": "Rebuilding dist bundle...",
+            "timeout": 120
+          }
+        ]
+      }
+    ]
+  }
+}
