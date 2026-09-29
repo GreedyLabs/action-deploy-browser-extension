@@ -126,7 +126,7 @@ jobs:
         run: bash -e -o pipefail -c "$BUILD_COMMAND"
       - name: Preserve the original package
         if: steps.package.outputs.exists != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ inputs.artifact-name }}
           path: ${{ inputs.zip-path }}
@@ -163,7 +163,7 @@ jobs:
           github-token: ${{ github.token }}
       - name: Download the original ZIP
         if: needs.plan.outputs.operation != 'status'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.artifact-name }}
           path: package
@@ -185,7 +185,7 @@ jobs:
           github-token: ${{ github.token }}
       - name: Restore deployment receipt
         if: steps.receipt.outputs.artifact-id != ''
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ${{ steps.receipt.outputs.artifact-name }}
           path: .browser-extension-deploy
@@ -235,7 +235,7 @@ jobs:
           EDGE_API_KEY: ${{ secrets.EDGE_API_KEY }}
       - name: Preserve deployment receipt even after failure
         if: ${{ always() && hashFiles('.browser-extension-deploy/*.json') != '' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ inputs.artifact-name }}-state-${{ matrix.target }}-${{ github.run_attempt }}
           path: .browser-extension-deploy/
