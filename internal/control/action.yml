@@ -1,0 +1,52 @@
+name: Browser extension workflow controller
+description: Internal preparation and recovery steps for the reusable deployment workflow
+inputs:
+  stage:
+    description: Internal workflow stage
+    required: true
+  operation:
+    description: Requested store operation
+    default: upload
+  targets:
+    description: Comma-separated store targets
+    default: chrome,edge
+  source-run-id:
+    description: Original upload run
+  release-branch:
+    description: Optional branch whose current commit is allowed to write to the stores
+  artifact-name:
+    description: Original ZIP artifact name and deployment namespace
+    default: extension-package
+  state-dir:
+    description: Internal receipt directory
+    default: .browser-extension-deploy
+  zip-path:
+    description: Original ZIP filename or build output path
+    default: extension.zip
+  build-command:
+    description: Project build command, validated when a new ZIP is needed
+  github-token:
+    description: Token with read access to workflow history
+    default: ${{ github.token }}
+outputs:
+  targets:
+    description: Target matrix JSON
+  operation:
+    description: Validated store operation
+  source-run-id:
+    description: Resolved original upload run
+  build:
+    description: Whether a package job is required
+  zip-file-name:
+    description: Filename inside the package artifact
+  exists:
+    description: Whether the original ZIP is already saved
+  artifact-id:
+    description: Receipt artifact ID
+  artifact-name:
+    description: Receipt artifact name
+  run-id:
+    description: Run containing the receipt
+runs:
+  using: node24
+  main: ../../dist/control/index.js

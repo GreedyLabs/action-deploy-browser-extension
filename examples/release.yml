@@ -1,10 +1,10 @@
-# Copy into an extension repository and adapt the build steps.
-# Pin a reviewed commit SHA instead of @v2 if immutable action versions are required.
-name: Release Extension
+# Copy to an extension repository and adapt the build command.
+name: Deploy Extension
 
 on:
   push:
-    tags: ['v*']
+    branches: [main]
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
       targets:
@@ -18,7 +18,7 @@ on:
         options: [status, upload, publish, deploy]
         default: status
       source-run-id:
-        description: Earlier run containing the original ZIP and receipts; required for publish
+        description: Original upload run (optional; matching upload is selected automatically)
         type: string
         required: false
 
@@ -27,213 +27,17 @@ permissions:
   actions: read
 
 jobs:
-  plan:
-    runs-on: ubuntu-latest
-    outputs:
-      targets: ${{ steps.plan.outputs.targets }}
-      operation: ${{ steps.plan.outputs.operation }}
-      source-run-id: ${{ steps.plan.outputs.source-run-id }}
-      build: ${{ steps.plan.outputs.build }}
-    steps:
-      - id: plan
-        uses: actions/github-script@v7
-        env:
-          REQUESTED_TARGETS: ${{ inputs.targets || 'both' }}
-          REQUESTED_OPERATION: ${{ github.event_name == 'push' && 'deploy' || inputs.operation }}
-          SOURCE_RUN_ID: ${{ inputs.source-run-id }}
-        with:
-          script: |
-            const target = process.env.REQUESTED_TARGETS;
-            const operation = process.env.REQUESTED_OPERATION;
-            const sourceRun = process.env.SOURCE_RUN_ID.trim();
-            if (!['both', 'chrome', 'edge'].includes(target)) throw new Error('Invalid targets');
-            if (!['status', 'upload', 'publish', 'deploy'].includes(operation)) throw new Error('Invalid operation');
-            if (sourceRun && !/^[1-9]\d*$/.test(sourceRun)) throw new Error('source-run-id must be a run ID');
-            if (operation === 'publish' && !sourceRun) {
-              throw new Error('publish requires source-run-id to reuse the original ZIP and upload receipt');
-            }
-            core.setOutput('targets', JSON.stringify(target === 'both' ? ['chrome', 'edge'] : [target]));
-            core.setOutput('operation', operation);
-            core.setOutput('source-run-id', sourceRun);
-            core.setOutput('build', operation !== 'status' && !sourceRun);
-
-  package:
-    name: Build one immutable ZIP
-    needs: plan
-    if: needs.plan.outputs.build == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Reuse the ZIP already saved for this run
-        id: package
-        uses: actions/github-script@v7
-        env:
-          RUN_ATTEMPT: ${{ github.run_attempt }}
-        with:
-          script: |
-            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
-              ...context.repo, run_id: context.runId, per_page: 100,
-            });
-            const existing = artifacts.find(a => a.name === 'extension-package' && !a.expired);
-            if (!existing && Number(process.env.RUN_ATTEMPT) > 1) {
-              throw new Error('Original extension-package is unavailable; do not rebuild the same version for a retry');
-            }
-            core.setOutput('exists', Boolean(existing));
-      - uses: actions/checkout@v6
-        if: steps.package.outputs.exists != 'true'
-      - uses: pnpm/action-setup@v4
-        if: steps.package.outputs.exists != 'true'
-      - uses: actions/setup-node@v6
-        if: steps.package.outputs.exists != 'true'
-        with:
-          node-version: 22
-          cache: pnpm
-      - if: steps.package.outputs.exists != 'true'
-        run: pnpm install --frozen-lockfile
-      - if: steps.package.outputs.exists != 'true'
-        run: pnpm run build
-      - name: ZIP extension contents, with manifest.json at the ZIP root
-        if: steps.package.outputs.exists != 'true'
-        working-directory: dist
-        run: zip -r ../extension.zip . -x '*.map' '*.DS_Store'
-      - uses: actions/upload-artifact@v4
-        if: steps.package.outputs.exists != 'true'
-        with:
-          name: extension-package
-          path: extension.zip
-          if-no-files-found: error
-          retention-days: 30
-
   deploy:
-    name: Deploy (${{ matrix.target }})
-    needs: [plan, package]
-    if: ${{ always() && needs.plan.result == 'success' && (needs.package.result == 'success' || needs.package.result == 'skipped') }}
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        target: ${{ fromJSON(needs.plan.outputs.targets) }}
-    # Use the same group in every workflow that writes to this item in this repository.
-    # Do not add workflow-level cancel-in-progress: true to a deployment workflow.
-    concurrency:
-      group: browser-extension-${{ matrix.target }}-${{ matrix.target == 'chrome' && vars.CHROME_EXTENSION_ID || vars.EDGE_PRODUCT_ID }}
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Download the original extension ZIP
-        if: needs.plan.outputs.operation != 'status'
-        uses: actions/download-artifact@v4
-        with:
-          name: extension-package
-          path: package
-          run-id: ${{ needs.plan.outputs.source-run-id || github.run_id }}
-          github-token: ${{ github.token }}
-
-      - name: Match the receipt to the latest executed store job
-        id: receipt
-        uses: actions/github-script@v7
-        env:
-          DEPLOY_TARGET: ${{ matrix.target }}
-          RUN_ATTEMPT: ${{ github.run_attempt }}
-          SOURCE_RUN_ID: ${{ needs.plan.outputs.source-run-id }}
-          OPERATION: ${{ needs.plan.outputs.operation }}
-        with:
-          script: |
-            const attempt = Number(process.env.RUN_ATTEMPT);
-            const target = process.env.DEPLOY_TARGET;
-            const sourceRun = process.env.SOURCE_RUN_ID;
-            const jobName = `Deploy (${target})`;
-            async function lastExecutedAttempt(runId, lastAttempt) {
-              for (let number = lastAttempt; number >= 1; number--) {
-                const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRunAttempt, {
-                  ...context.repo, run_id: runId, attempt_number: number, per_page: 100,
-                });
-                const matches = jobs.filter(job => job.name === jobName && job.conclusion !== 'skipped');
-                if (!matches.length) continue; // Only another store ran in this attempt.
-                if (matches.length !== 1 || matches[0].status !== 'completed') {
-                  throw new Error(`Cannot establish a completed ${jobName} in run ${runId}, attempt ${number}`);
-                }
-                return number;
-              }
-              return undefined;
-            }
-            let runId = context.runId;
-            let previous = await lastExecutedAttempt(runId, attempt - 1);
-            if (previous === undefined && sourceRun) {
-              runId = Number(sourceRun);
-              const {data: source} = await github.rest.actions.getWorkflowRun({...context.repo, run_id: runId});
-              if (!Number.isSafeInteger(source.run_attempt) || source.run_attempt < 1) {
-                throw new Error('Source run has an invalid attempt number');
-              }
-              previous = await lastExecutedAttempt(runId, source.run_attempt);
-              if (previous === undefined) throw new Error(`Source run has no executed ${jobName}`);
-            }
-            if (previous === undefined) {
-              if (process.env.OPERATION === 'publish') throw new Error('Publish requires a prior upload invocation');
-              core.info(`First ${jobName} invocation: no earlier store job or receipt`);
-              return;
-            }
-            // Never select an older snapshot when a later store invocation lost its snapshot.
-            const expectedName = `deploy-state-${target}-${previous}`;
-            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
-              ...context.repo, run_id: runId, per_page: 100,
-            });
-            const matches = artifacts.filter(a => a.name === expectedName && !a.expired);
-            if (matches.length !== 1) {
-              throw new Error(`Missing receipt snapshot ${expectedName} for the latest ${jobName}; inspect the store before resuming`);
-            }
-            const artifact = matches[0];
-            core.setOutput('artifact-id', String(artifact.id));
-            core.setOutput('artifact-name', artifact.name);
-            core.setOutput('run-id', String(runId));
-
-      - name: Restore deployment receipt
-        if: steps.receipt.outputs.artifact-id != ''
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ steps.receipt.outputs.artifact-name }}
-          path: .browser-extension-deploy
-          run-id: ${{ steps.receipt.outputs.run-id }}
-          github-token: ${{ github.token }}
-
-      - name: Record this invocation before validation or store writes
-        uses: actions/github-script@v7
-        env:
-          DEPLOY_TARGET: ${{ matrix.target }}
-          RUN_ATTEMPT: ${{ github.run_attempt }}
-        with:
-          script: |
-            const fs = require('node:fs/promises');
-            await fs.mkdir('.browser-extension-deploy', {recursive: true});
-            await fs.writeFile('.browser-extension-deploy/invocation.json', JSON.stringify({
-              schemaVersion: 1,
-              runId: context.runId,
-              runAttempt: Number(process.env.RUN_ATTEMPT),
-              target: process.env.DEPLOY_TARGET,
-            }, null, 2) + '\n');
-
-      - name: Deploy selected store
-        id: deploy
-        uses: GreedyLabs/action-deploy-browser-extension@v2
-        with:
-          zip-path: package/extension.zip
-          targets: ${{ matrix.target }}
-          operation: ${{ needs.plan.outputs.operation }}
-          chrome-publisher-id: ${{ vars.CHROME_PUBLISHER_ID }}
-          chrome-extension-id: ${{ vars.CHROME_EXTENSION_ID }}
-          edge-product-id: ${{ vars.EDGE_PRODUCT_ID }}
-          state-dir: .browser-extension-deploy
-        env:
-          CHROME_SERVICE_ACCOUNT_KEY: ${{ secrets.CHROME_SERVICE_ACCOUNT_KEY }}
-          EDGE_CLIENT_ID: ${{ secrets.EDGE_CLIENT_ID }}
-          EDGE_API_KEY: ${{ secrets.EDGE_API_KEY }}
-
-      - name: Preserve deployment receipt even if deployment failed
-        if: ${{ always() && hashFiles('.browser-extension-deploy/*.json') != '' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: deploy-state-${{ matrix.target }}-${{ github.run_attempt }}
-          path: .browser-extension-deploy/
-          include-hidden-files: true
-          if-no-files-found: error
-          retention-days: 30
+    uses: GreedyLabs/action-deploy-browser-extension/.github/workflows/deploy.yml@v2
+    with:
+      operation: ${{ github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/') && 'publish' || 'upload') || inputs.operation }}
+      targets: ${{ inputs.targets != '' && inputs.targets != 'both' && inputs.targets || 'chrome, edge' }}
+      source-run-id: ${{ inputs.source-run-id }}
+      build-command: pnpm install --frozen-lockfile && pnpm run build:zip
+      chrome-publisher-id: ${{ vars.CHROME_PUBLISHER_ID }}
+      chrome-extension-id: ${{ vars.CHROME_EXTENSION_ID }}
+      edge-product-id: ${{ vars.EDGE_PRODUCT_ID }}
+    secrets:
+      CHROME_SERVICE_ACCOUNT_KEY: ${{ secrets.CHROME_SERVICE_ACCOUNT_KEY }}
+      EDGE_CLIENT_ID: ${{ secrets.EDGE_CLIENT_ID }}
+      EDGE_API_KEY: ${{ secrets.EDGE_API_KEY }}

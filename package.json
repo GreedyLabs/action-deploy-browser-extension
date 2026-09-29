@@ -1,12 +1,12 @@
 {
   "name": "action-deploy-browser-extension",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "GitHub Action to deploy browser extensions to Chrome Web Store and Microsoft Edge Add-ons",
   "type": "module",
   "main": "dist/index.js",
   "packageManager": "pnpm@10.32.1",
   "scripts": {
-    "build": "ncc build src/index.ts -o dist --quiet",
+    "build": "ncc build src/index.ts -o dist --quiet && ncc build src/control/index.ts -o dist/control --quiet",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src tests",
     "lint:fix": "eslint src tests --fix",

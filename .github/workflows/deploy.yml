@@ -1,0 +1,244 @@
+name: Deploy browser extension
+
+on:
+  workflow_call:
+    inputs:
+      operation:
+        description: upload, publish, deploy, or read-only status
+        type: string
+        default: "upload"
+      targets:
+        description: Comma-separated stores to process
+        type: string
+        default: "chrome, edge"
+      build-command:
+        description: Command to build the ZIP in the caller repository
+        type: string
+        default: ""
+      zip-path:
+        description: Path to the original ZIP created by the build command
+        type: string
+        default: "extension.zip"
+      source-run-id:
+        description: Original upload run; publish auto-selects a matching run when omitted
+        type: string
+        default: ""
+      release-branch:
+        description: Branch whose current commit may write to stores; empty disables the guard
+        type: string
+        default: "main"
+      node-version:
+        description: Node.js version for the build
+        type: string
+        default: "22"
+      artifact-name:
+        description: Unique package and receipt namespace within this workflow
+        type: string
+        default: "extension-package"
+      retention-days:
+        description: Days to retain the original ZIP and deployment receipts
+        type: number
+        default: 30
+      chrome-publisher-id:
+        description: Chrome Web Store publisher ID
+        type: string
+        default: ""
+      chrome-extension-id:
+        description: Chrome extension ID
+        type: string
+        default: ""
+      edge-product-id:
+        description: Edge Add-ons product ID
+        type: string
+        default: ""
+    secrets:
+      CHROME_SERVICE_ACCOUNT_KEY:
+        required: false
+      EDGE_CLIENT_ID:
+        required: false
+      EDGE_API_KEY:
+        required: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      targets: ${{ steps.plan.outputs.targets }}
+      operation: ${{ steps.plan.outputs.operation }}
+      source-run-id: ${{ steps.plan.outputs.source-run-id }}
+      build: ${{ steps.plan.outputs.build }}
+      zip-file-name: ${{ steps.plan.outputs.zip-file-name }}
+    steps:
+      - name: Plan package and stores
+        id: plan
+        uses: GreedyLabs/action-deploy-browser-extension/internal/control@v2.1.0
+        with:
+          stage: plan
+          operation: ${{ inputs.operation }}
+          targets: ${{ inputs.targets }}
+          source-run-id: ${{ inputs.source-run-id }}
+          release-branch: ${{ inputs.release-branch }}
+          artifact-name: ${{ inputs.artifact-name }}
+          state-dir: .browser-extension-deploy
+          zip-path: ${{ inputs.zip-path }}
+          build-command: ${{ inputs.build-command }}
+          github-token: ${{ github.token }}
+
+  package:
+    name: Preserve the original ZIP
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reuse the original package on retries
+        id: package
+        uses: GreedyLabs/action-deploy-browser-extension/internal/control@v2.1.0
+        with:
+          stage: package
+          operation: ${{ needs.plan.outputs.operation }}
+          targets: ${{ inputs.targets }}
+          source-run-id: ${{ needs.plan.outputs.source-run-id }}
+          release-branch: ${{ inputs.release-branch }}
+          artifact-name: ${{ inputs.artifact-name }}
+          state-dir: .browser-extension-deploy
+          zip-path: ${{ inputs.zip-path }}
+          build-command: ${{ inputs.build-command }}
+          github-token: ${{ github.token }}
+      - uses: actions/checkout@v6
+        if: steps.package.outputs.exists != 'true'
+      - name: Install pnpm when the project uses it
+        if: steps.package.outputs.exists != 'true' && hashFiles('pnpm-lock.yaml') != ''
+        uses: pnpm/action-setup@v6
+      - name: Set up the build runtime
+        if: steps.package.outputs.exists != 'true'
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: ${{ hashFiles('pnpm-lock.yaml') != '' && 'pnpm' || '' }}
+      - name: Build extension ZIP
+        if: steps.package.outputs.exists != 'true' && inputs.build-command != ''
+        env:
+          BUILD_COMMAND: ${{ inputs.build-command }}
+        run: bash -e -o pipefail -c "$BUILD_COMMAND"
+      - name: Preserve the original package
+        if: steps.package.outputs.exists != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ inputs.zip-path }}
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention-days }}
+
+  deploy:
+    name: Deploy (${{ matrix.target }})
+    needs: [plan, package]
+    if: ${{ always() && needs.plan.result == 'success' && (needs.package.result == 'success' || needs.package.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.plan.outputs.targets) }}
+    # Every workflow writing to this store item must use the same group.
+    concurrency:
+      group: browser-extension-${{ matrix.target }}-${{ matrix.target == 'chrome' && inputs.chrome-extension-id || inputs.edge-product-id }}
+      cancel-in-progress: false
+    steps:
+      - name: Require the original upload package
+        if: needs.plan.outputs.operation != 'status'
+        uses: GreedyLabs/action-deploy-browser-extension/internal/control@v2.1.0
+        with:
+          stage: validate-package
+          operation: ${{ needs.plan.outputs.operation }}
+          targets: ${{ matrix.target }}
+          source-run-id: ${{ needs.plan.outputs.source-run-id }}
+          release-branch: ${{ inputs.release-branch }}
+          artifact-name: ${{ inputs.artifact-name }}
+          state-dir: .browser-extension-deploy
+          zip-path: ${{ inputs.zip-path }}
+          build-command: ${{ inputs.build-command }}
+          github-token: ${{ github.token }}
+      - name: Download the original ZIP
+        if: needs.plan.outputs.operation != 'status'
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: package
+          run-id: ${{ needs.plan.outputs.source-run-id || github.run_id }}
+          github-token: ${{ github.token }}
+      - name: Find the latest deployment receipt
+        id: receipt
+        uses: GreedyLabs/action-deploy-browser-extension/internal/control@v2.1.0
+        with:
+          stage: restore
+          operation: ${{ needs.plan.outputs.operation }}
+          targets: ${{ matrix.target }}
+          source-run-id: ${{ needs.plan.outputs.source-run-id }}
+          release-branch: ${{ inputs.release-branch }}
+          artifact-name: ${{ inputs.artifact-name }}
+          state-dir: .browser-extension-deploy
+          zip-path: package/${{ needs.plan.outputs.zip-file-name }}
+          build-command: ${{ inputs.build-command }}
+          github-token: ${{ github.token }}
+      - name: Restore deployment receipt
+        if: steps.receipt.outputs.artifact-id != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.receipt.outputs.artifact-name }}
+          path: .browser-extension-deploy
+          run-id: ${{ steps.receipt.outputs.run-id }}
+          github-token: ${{ github.token }}
+      - name: Record deployment invocation (${{ inputs.artifact-name }}/${{ matrix.target }})
+        uses: GreedyLabs/action-deploy-browser-extension/internal/control@v2.1.0
+        with:
+          stage: checkpoint
+          operation: ${{ needs.plan.outputs.operation }}
+          targets: ${{ matrix.target }}
+          source-run-id: ${{ needs.plan.outputs.source-run-id }}
+          release-branch: ${{ inputs.release-branch }}
+          artifact-name: ${{ inputs.artifact-name }}
+          state-dir: .browser-extension-deploy
+          zip-path: package/${{ needs.plan.outputs.zip-file-name }}
+          build-command: ${{ inputs.build-command }}
+          github-token: ${{ github.token }}
+      - name: Verify the current release commit inside the store lock
+        if: needs.plan.outputs.operation != 'status'
+        uses: GreedyLabs/action-deploy-browser-extension/internal/control@v2.1.0
+        with:
+          stage: guard
+          operation: ${{ needs.plan.outputs.operation }}
+          targets: ${{ matrix.target }}
+          source-run-id: ${{ needs.plan.outputs.source-run-id }}
+          release-branch: ${{ inputs.release-branch }}
+          artifact-name: ${{ inputs.artifact-name }}
+          state-dir: .browser-extension-deploy
+          zip-path: package/${{ needs.plan.outputs.zip-file-name }}
+          build-command: ${{ inputs.build-command }}
+          github-token: ${{ github.token }}
+      - name: Deploy selected store
+        id: deploy
+        uses: GreedyLabs/action-deploy-browser-extension@v2.1.0
+        with:
+          zip-path: package/${{ needs.plan.outputs.zip-file-name }}
+          targets: ${{ matrix.target }}
+          operation: ${{ needs.plan.outputs.operation }}
+          chrome-publisher-id: ${{ inputs.chrome-publisher-id }}
+          chrome-extension-id: ${{ inputs.chrome-extension-id }}
+          edge-product-id: ${{ inputs.edge-product-id }}
+          state-dir: .browser-extension-deploy
+        env:
+          CHROME_SERVICE_ACCOUNT_KEY: ${{ secrets.CHROME_SERVICE_ACCOUNT_KEY }}
+          EDGE_CLIENT_ID: ${{ secrets.EDGE_CLIENT_ID }}
+          EDGE_API_KEY: ${{ secrets.EDGE_API_KEY }}
+      - name: Preserve deployment receipt even after failure
+        if: ${{ always() && hashFiles('.browser-extension-deploy/*.json') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact-name }}-state-${{ matrix.target }}-${{ github.run_attempt }}
+          path: .browser-extension-deploy/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention-days }}
