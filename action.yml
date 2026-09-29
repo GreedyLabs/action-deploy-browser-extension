@@ -1,5 +1,5 @@
 name: Deploy Browser Extension
-description: Upload and publish browser extensions to Chrome Web Store and/or Microsoft Edge Add-ons
+description: Upload, publish, and inspect browser extensions in Chrome Web Store and Microsoft Edge Add-ons
 author: greedylabs
 
 branding:
@@ -8,34 +8,66 @@ branding:
 
 inputs:
   zip-path:
-    description: Path to the zip file to upload
-    required: true
+    description: Original extension ZIP, required for upload, publish, and deploy; manifest.json must be at its root
+    required: false
   targets:
-    description: Comma-separated list of targets (chrome, edge)
+    description: Comma-separated list of targets (chrome, edge); duplicates are removed
     required: true
     default: chrome
+  operation:
+    description: status, upload, publish, or deploy; when omitted, the legacy publish input selects upload or deploy
+    required: false
   publish:
-    description: Publish after upload
+    description: Legacy upload/deploy selector; omit when using operation (true conflicts with explicit status or upload)
     required: false
     default: 'false'
-
-  # Chrome Web Store
   chrome-extension-id:
-    description: Chrome Web Store extension ID
+    description: Chrome Web Store extension ID; required when targeting chrome
     required: false
-
-  # Microsoft Edge Add-ons
+  chrome-publisher-id:
+    description: Chrome Web Store API v2 publisher ID; required when targeting chrome
+    required: false
   edge-product-id:
-    description: Microsoft Edge Add-ons product ID
+    description: Microsoft Edge Add-ons product ID; required when targeting edge
     required: false
+  state-dir:
+    description: Directory containing per-store deployment receipts; persist and restore it across runs
+    required: false
+    default: .browser-extension-deploy
+  request-timeout-seconds:
+    description: Timeout for one HTTP request
+    required: false
+    default: '30'
+  poll-timeout-seconds:
+    description: Maximum time to wait for an asynchronous store operation
+    required: false
+    default: '300'
+  poll-interval-seconds:
+    description: Delay between asynchronous operation status checks
+    required: false
+    default: '5'
+  max-attempts:
+    description: Maximum HTTP attempts for requests that are safe to retry; write requests are not blindly replayed
+    required: false
+    default: '3'
 
 outputs:
   chrome-upload-status:
-    description: Chrome Web Store upload state
+    description: Chrome Web Store upload state (legacy output)
   chrome-publish-status:
-    description: Chrome Web Store publish status
+    description: Chrome Web Store publish status (legacy output)
   edge-operation-id:
-    description: Microsoft Edge Add-ons upload operation ID
+    description: Microsoft Edge Add-ons upload operation ID (legacy output)
+  edge-publish-operation-id:
+    description: Microsoft Edge Add-ons publish operation ID
+  results:
+    description: JSON array containing each target's outcome, phase, artifact identity, and available store details
+  failed-targets:
+    description: Comma-separated target IDs with pending, blocked, or failed outcomes
+  outcome:
+    description: Overall deployment outcome
+  state-dir:
+    description: Deployment receipt directory to persist for retries
 
 runs:
   using: node24

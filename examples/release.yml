@@ -1,8 +1,10 @@
-# Manual integration test against real store items. Use dedicated test extensions.
-# Default operation is read-only; upload/deploy uses tests/fixtures/dist.zip.
-name: Test Deploy Action
+# Copy into an extension repository and adapt the build steps.
+# Pin a reviewed commit SHA instead of @v2 if immutable action versions are required.
+name: Release Extension
 
 on:
+  push:
+    tags: ['v*']
   workflow_dispatch:
     inputs:
       targets:
@@ -56,7 +58,7 @@ jobs:
             core.setOutput('build', operation !== 'status' && !sourceRun);
 
   package:
-    name: Preserve the test ZIP
+    name: Build one immutable ZIP
     needs: plan
     if: needs.plan.outputs.build == 'true'
     runs-on: ubuntu-latest
@@ -78,8 +80,21 @@ jobs:
             core.setOutput('exists', Boolean(existing));
       - uses: actions/checkout@v6
         if: steps.package.outputs.exists != 'true'
+      - uses: pnpm/action-setup@v4
+        if: steps.package.outputs.exists != 'true'
+      - uses: actions/setup-node@v6
+        if: steps.package.outputs.exists != 'true'
+        with:
+          node-version: 22
+          cache: pnpm
       - if: steps.package.outputs.exists != 'true'
-        run: cp tests/fixtures/dist.zip extension.zip
+        run: pnpm install --frozen-lockfile
+      - if: steps.package.outputs.exists != 'true'
+        run: pnpm run build
+      - name: ZIP extension contents, with manifest.json at the ZIP root
+        if: steps.package.outputs.exists != 'true'
+        working-directory: dist
+        run: zip -r ../extension.zip . -x '*.map' '*.DS_Store'
       - uses: actions/upload-artifact@v4
         if: steps.package.outputs.exists != 'true'
         with:
@@ -199,7 +214,7 @@ jobs:
 
       - name: Deploy selected store
         id: deploy
-        uses: ./
+        uses: GreedyLabs/action-deploy-browser-extension@v2
         with:
           zip-path: package/extension.zip
           targets: ${{ matrix.target }}

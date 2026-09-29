@@ -1,6 +1,6 @@
 {
   "name": "action-deploy-browser-extension",
-  "version": "1.0.2",
+  "version": "2.0.0",
   "description": "GitHub Action to deploy browser extensions to Chrome Web Store and Microsoft Edge Add-ons",
   "type": "module",
   "main": "dist/index.js",
@@ -13,7 +13,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@actions/core": "^3.0.0"
+    "@actions/core": "^3.0.0",
+    "fflate": "^0.8.2"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",

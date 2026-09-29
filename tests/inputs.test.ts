@@ -1,56 +1,37 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { parseTargets, getInputs } from '../src/inputs.js';
 
-describe('parseTargets', () => {
-  it('parses a single target', () => {
-    expect(parseTargets('chrome')).toEqual(['chrome']);
+afterEach(() => vi.unstubAllEnvs());
+function input(key: string, value: string) { vi.stubEnv(`INPUT_${key.toUpperCase()}`, value); }
+function defaults() { input('zip-path', 'dist.zip'); input('targets', 'chrome, edge'); }
+
+describe('inputs', () => {
+  it('normalizes and deduplicates targets to prevent duplicate writes', () => {
+    expect(parseTargets(' Chrome,,edge,CHROME, ')).toEqual(['chrome', 'edge']);
   });
-
-  it('parses multiple comma-separated targets', () => {
-    expect(parseTargets('chrome, edge')).toEqual(['chrome', 'edge']);
+  it('rejects an empty target selection', () => expect(() => parseTargets(', ,')).toThrow(/At least one/));
+  it('rejects unsupported targets', () => expect(() => parseTargets('chrome,safari')).toThrow(/safari/));
+  it('maps the legacy publish input to deploy', () => {
+    defaults(); input('publish', 'true');
+    expect(getInputs()).toMatchObject({ operation: 'deploy', targets: ['chrome', 'edge'], pollTimeoutMs: 300000 });
   });
-
-  it('trims whitespace and lowercases', () => {
-    expect(parseTargets('  Chrome ,  EDGE ')).toEqual(['chrome', 'edge']);
+  it('defaults to upload', () => { defaults(); expect(getInputs().operation).toBe('upload'); });
+  it('supports status without a ZIP', () => {
+    input('targets', 'edge'); input('operation', 'status'); input('zip-path', '');
+    expect(getInputs().zipPath).toBe('');
   });
-
-  it('ignores empty segments (e.g. a trailing comma)', () => {
-    expect(parseTargets('chrome,,edge,')).toEqual(['chrome', 'edge']);
+  it('requires the original ZIP for publish', () => {
+    input('targets', 'edge'); input('operation', 'publish'); input('zip-path', '');
+    expect(() => getInputs()).toThrow(/zip-path/);
   });
-
-  it('throws on an unknown target', () => {
-    expect(() => parseTargets('firefox')).toThrow(/Unknown target\(s\): firefox/);
+  it('rejects contradictory operation and legacy flag', () => {
+    defaults(); input('publish', 'true'); input('operation', 'upload');
+    expect(() => getInputs()).toThrow(/conflicts/);
   });
-
-  it('reports only the invalid targets', () => {
-    expect(() => parseTargets('chrome, safari')).toThrow(/safari/);
+  it.each(['no', '1'])('rejects ambiguous boolean %s', (value) => {
+    defaults(); input('publish', value); expect(() => getInputs()).toThrow(/true or false/);
   });
-});
-
-describe('getInputs', () => {
-  const keys = ['INPUT_ZIP-PATH', 'INPUT_TARGETS', 'INPUT_PUBLISH', 'INPUT_CHROME-EXTENSION-ID', 'INPUT_EDGE-PRODUCT-ID'];
-  afterEach(() => keys.forEach((k) => delete process.env[k]));
-
-  it('reads and parses all inputs', () => {
-    process.env['INPUT_ZIP-PATH'] = 'dist.zip';
-    process.env['INPUT_TARGETS'] = 'chrome, edge';
-    process.env['INPUT_PUBLISH'] = 'true';
-    process.env['INPUT_CHROME-EXTENSION-ID'] = 'abc';
-    process.env['INPUT_EDGE-PRODUCT-ID'] = 'def';
-
-    expect(getInputs()).toEqual({
-      zipPath: 'dist.zip',
-      targets: ['chrome', 'edge'],
-      shouldPublish: true,
-      chromeExtensionId: 'abc',
-      edgeProductId: 'def',
-    });
-  });
-
-  it('defaults publish to false when not "true"', () => {
-    process.env['INPUT_ZIP-PATH'] = 'dist.zip';
-    process.env['INPUT_TARGETS'] = 'chrome';
-    process.env['INPUT_PUBLISH'] = 'no';
-    expect(getInputs().shouldPublish).toBe(false);
+  it.each(['0', '-1', '1.5', 'Infinity', 'garbage', '121'])('rejects invalid request timeout %s', (value) => {
+    defaults(); input('request-timeout-seconds', value); expect(() => getInputs()).toThrow(/integer between/);
   });
 });

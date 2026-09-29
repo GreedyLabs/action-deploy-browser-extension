@@ -22,7 +22,7 @@ describe('base64url', () => {
 });
 
 describe('createGoogleAccessToken', () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
   it('signs a valid RS256 JWT and exchanges it for a token', async () => {
     const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', {
@@ -69,5 +69,39 @@ describe('createGoogleAccessToken', () => {
     await expect(
       createGoogleAccessToken(JSON.stringify({ client_email: 'a@b.com', private_key: privateKey })),
     ).rejects.toThrow(/Failed to obtain access token/);
+  });
+});
+
+describe('Google token request failure handling', () => {
+  const { privateKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048, privateKeyEncoding: { type: 'pkcs8', format: 'pem' }, publicKeyEncoding: { type: 'spki', format: 'pem' } });
+  const key = JSON.stringify({ client_email: 'test@example.invalid', private_key: privateKey });
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+  it('never includes malformed credential text in errors', async () => {
+    await expect(createGoogleAccessToken('SECRET_PRIVATE_KEY')).rejects.toThrow('valid service-account JSON');
+    await expect(createGoogleAccessToken('{"client_email":"x","private_key":"SECRET_PRIVATE_KEY"}')).rejects.toThrow('cannot sign');
+  });
+
+  it('rejects non-success HTTP responses even when they contain an access_token', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ access_token: 'SECRET', detail: key }), { status: 403 })));
+    await expect(createGoogleAccessToken(key)).rejects.toThrow('HTTP 403');
+  });
+
+  it.each([{}, { access_token: 123 }, { access_token: '' }, { access_token: '  ' }])('rejects malformed successful response %j', async (body) => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(body))));
+    await expect(createGoogleAccessToken(key)).rejects.toThrow('no valid token');
+  });
+
+  it('rejects invalid JSON without leaking the server response', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('SECRET_SERVER_BODY')));
+    await expect(createGoogleAccessToken(key)).rejects.toThrow('invalid access-token response');
+  });
+
+  it('bounds authentication and reports network failure without its potentially sensitive details', async () => {
+    const mock = vi.fn(async () => { throw new Error(`SECRET:${key}`); });
+    vi.stubGlobal('fetch', mock);
+    await expect(createGoogleAccessToken(key, undefined, 500)).rejects.toThrow('timed out or failed');
+    expect(mock).toHaveBeenCalledOnce();
+    expect(mock).toHaveBeenCalledWith('https://oauth2.googleapis.com/token', expect.objectContaining({ signal: expect.any(AbortSignal), redirect: 'error' }));
   });
 });
